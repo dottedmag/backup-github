@@ -1,0 +1,65 @@
+#!/usr/bin/env python
+
+import shutil
+import errno
+import sys
+from github import Github
+from os.path import join, isdir
+from subprocess import check_call, Popen, STDOUT, PIPE
+import os
+
+null = open('/dev/null', 'w')
+
+def makedirs_p(path, mode=0777):
+    try:
+        os.makedirs(path, mode)
+    except OSError, e:
+        if e.errno not in (errno.EISDIR, errno.EEXIST):
+            raise
+
+def has_repo(basedir, owner, reponame):
+    return isdir(join(basedir, owner, reponame+'.git'))
+
+def update_repo(basedir, owner, reponame):
+    path = join(basedir, owner, reponame+'.git')
+    p = Popen(['git', 'remote', 'update'], cwd=path, stdin=null, stdout=PIPE,
+              stderr=STDOUT)
+    (out, _) = p.communicate()
+    if p.returncode != 0:
+        sys.stderr.write('Failed to update {0}/{1}:\n'.format(owner, reponame))
+        sys.stderr.write(out)
+        return False
+    return True
+
+def clone_repo(basedir, owner, reponame, token, require):
+    dirpath = join(basedir, owner)
+    path = join(dirpath, reponame)
+    makedirs_p(dirpath)
+    url = 'https://{0}@github.com/{1}/{2}'.format(token, owner, reponame)
+    p = Popen(['git', 'clone', '--mirror', url], cwd=dirpath, stdin=null,
+              stdout=PIPE, stderr=STDOUT)
+    (out, _) = p.communicate()
+    if p.returncode != 0 and require:
+        shutil.rmtree(path, True)
+        sys.stderr.write('Failed to clone {0}/{1}:\n'.format(owner, reponame))
+        sys.stderr.write(out)
+        return False
+    return True
+
+def backup_repo(basedir, owner, reponame, token, require=False):
+    if has_repo(basedir, owner, reponame):
+        return update_repo(basedir, owner, reponame)
+    else:
+        return clone_repo(basedir, owner, reponame, token, require)
+
+def do_backup(token, outdir):
+    g = Github(token)
+    for r in g.get_user().get_repos():
+        login = r.owner.login
+        if not backup_repo(outdir, login, r.name, token, True):
+            return False
+        if r.has_wiki and not backup_repo(outdir, login, r.name+'.wiki', token):
+            return False
+
+if __name__ == '__main__':
+    sys.exit(0 if do_backup(sys.argv[1], 'backup-github') else 1)
